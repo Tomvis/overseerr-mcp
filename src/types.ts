@@ -147,6 +147,7 @@ export interface ManageRequestsArgs {
   take?: number;
   skip?: number;
   sort?: 'added' | 'modified';
+  removeMedia?: boolean;
 }
 
 export interface GetDetailsArgs {

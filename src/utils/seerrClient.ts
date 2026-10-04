@@ -201,6 +201,21 @@ export class SeerrApiClient {
     this.cache.invalidate('mediaDetails');
   }
 
+  // ── Media ────────────────────────────────────────────────────────────────────
+
+  /** Seerr's "Remove from Radarr/Sonarr": deletes the item and its files in the *arr. */
+  async removeMediaFiles(mediaId: number, is4k = false): Promise<void> {
+    await this.http.delete(`/media/${mediaId}/file`, { params: { is4k } });
+    this.cache.invalidate('mediaDetails');
+  }
+
+  /** Seerr's "Clear data": drops the media row, so it no longer shows as available or processing. */
+  async deleteMedia(mediaId: number): Promise<void> {
+    await this.http.delete(`/media/${mediaId}`);
+    this.cache.invalidate('requests');
+    this.cache.invalidate('mediaDetails');
+  }
+
   // ── Services ─────────────────────────────────────────────────────────────────
 
   async listServices(type: 'radarr' | 'sonarr'): Promise<ServiceConfig[]> {

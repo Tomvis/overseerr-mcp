@@ -528,6 +528,7 @@ class OverseerrServer {
           name: 'manage_media_requests',
           description:
             'Manage requests: get/list/approve/decline/delete. Supports filters and batching.\n' +
+            'delete removes only the request unless removeMedia=true (also deletes the media and its files).\n' +
             'Filters: all|pending|approved|available|processing|unavailable|failed',
           inputSchema: {
             type: 'object',
@@ -567,6 +568,12 @@ class OverseerrServer {
                 type: 'string',
                 enum: ['added', 'modified'],
                 default: 'added',
+              },
+              removeMedia: {
+                type: 'boolean',
+                description: 'delete only: also remove the movie/show and its files from Radarr/Sonarr and clear it in Seerr. ' +
+                  'Use when the user wants it removed completely, not just the request. Removes the whole show, not only the requested seasons.',
+                default: false,
               },
             },
             required: ['action'],
@@ -1517,8 +1524,16 @@ class OverseerrServer {
     }
 
     const results = await batchWithRetry(ids, async (id) => {
+      if (!args.removeMedia) {
+        await this.client.deleteRequest(id);
+        return { id, deleted: true };
+      }
+      // Files first: if the *arr removal fails, the request stays and the call can be retried.
+      const request = await this.client.getRequest(id);
+      await this.client.removeMediaFiles(request.media.id, request.is4k ?? false);
       await this.client.deleteRequest(id);
-      return { id, deleted: true };
+      await this.client.deleteMedia(request.media.id);
+      return { id, deleted: true, mediaId: request.media.id, mediaRemoved: true };
     });
 
     const successful = results.filter(r => r.success);
