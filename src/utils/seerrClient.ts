@@ -8,6 +8,7 @@ import type {
   MediaRequest,
   ServiceConfig,
   ServiceDetailsResponse,
+  Issue,
 } from '../types.js';
 
 export interface CreateRequestBody {
@@ -25,6 +26,22 @@ export interface ListRequestsParams {
   take?: number;
   skip?: number;
   sort?: string;
+}
+
+export interface ListIssuesParams {
+  filter?: string;
+  take?: number;
+  skip?: number;
+  sort?: string;
+  createdBy?: number;
+}
+
+export interface CreateIssueBody {
+  mediaId: number;
+  issueType: number;
+  message: string;
+  problemSeason?: number;
+  problemEpisode?: number;
 }
 
 export interface CreatedRequest {
@@ -244,6 +261,61 @@ export class SeerrApiClient {
       this.http.get<ServiceDetailsResponse>(`/service/${type}/${serverId}`)
     );
     this.cache.set('serviceDetails', cacheKey, response.data);
+    return response.data;
+  }
+
+  // ── Discover ─────────────────────────────────────────────────────────────────
+
+  /** GET /discover/<path> (trending, movies, tv, movies/upcoming, tv/upcoming); shares the search TTL. */
+  async discover(
+    path: string,
+    params: { page?: number; language?: string; mediaType?: string; timeWindow?: string }
+  ): Promise<SearchResult> {
+    const query: Record<string, string | number> = { page: params.page ?? 1, language: params.language ?? 'en' };
+    if (params.mediaType) query.mediaType = params.mediaType;
+    if (params.timeWindow) query.timeWindow = params.timeWindow;
+    const cacheKey = { discover: path, ...query };
+
+    const cached = this.cache.get<SearchResult>('search', cacheKey);
+    if (cached) return cached;
+
+    const response = await withRetry(() =>
+      this.http.get<SearchResult>(`/discover/${path}`, { params: query })
+    );
+    this.cache.set('search', cacheKey, response.data);
+    return response.data;
+  }
+
+  // ── Issues (never cached: comments change them) ──────────────────────────────
+
+  async listIssues(params: ListIssuesParams): Promise<{ results: Issue[]; pageInfo: any }> {
+    const { take = 20, skip = 0, sort = 'added', filter = 'open', createdBy } = params;
+    const query: Record<string, string | number> = { take, skip, sort, filter };
+    if (createdBy != null) query.createdBy = createdBy;
+    const response = await withRetry(() =>
+      this.http.get<{ results: Issue[]; pageInfo: any }>('/issue', { params: query })
+    );
+    return response.data;
+  }
+
+  async getIssue(id: number): Promise<Issue> {
+    const response = await withRetry(() => this.http.get<Issue>(`/issue/${id}`));
+    return response.data;
+  }
+
+  /** mediaId is Seerr's own media id (mediaInfo.id), not the TMDB id. */
+  async createIssue(body: CreateIssueBody): Promise<Issue> {
+    const response = await this.http.post<Issue>('/issue', body);
+    return response.data;
+  }
+
+  async commentIssue(id: number, message: string): Promise<Issue> {
+    const response = await this.http.post<Issue>(`/issue/${id}/comment`, { message });
+    return response.data;
+  }
+
+  async setIssueStatus(id: number, status: 'open' | 'resolved'): Promise<Issue> {
+    const response = await this.http.post<Issue>(`/issue/${id}/${status}`);
     return response.data;
   }
 

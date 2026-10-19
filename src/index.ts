@@ -32,7 +32,13 @@ import {
   DedupeDetails,
   GetServicesArgs,
   GetServiceDetailsArgs,
+  DiscoverArgs,
+  Issue,
+  ManageIssuesArgs,
 } from './types.js';
+
+// Seerr IssueType 1..4
+const ISSUE_TYPES = ['VIDEO', 'AUDIO', 'SUBTITLES', 'OTHER'];
 
 // Field mapping for includeDetails feature
 type FieldMapper = (item: { mediaType: string; id: number }, details: MediaDetails, is4k?: boolean) => any;
@@ -669,6 +675,51 @@ class OverseerrServer {
             required: ['serviceType'],
           },
         },
+        {
+          name: 'discover_media',
+          description:
+            'Browse what is trending, upcoming or popular (TMDB via Seerr), with each title\'s library/request status. ' +
+            'People are left out. Request with request_media.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              list: { type: 'string', enum: ['trending', 'upcoming', 'popular'] },
+              mediaType: { type: 'string', enum: ['all', 'movie', 'tv'], default: 'all' },
+              timeWindow: { type: 'string', enum: ['day', 'week'], description: 'trending only', default: 'day' },
+              page: { type: 'number', default: 1 },
+              limit: { type: 'number', description: 'Max results' },
+              language: { type: 'string', default: 'en' },
+              format: { type: 'string', enum: ['compact', 'full'], default: 'compact' },
+            },
+            required: ['list'],
+          },
+        },
+        {
+          name: 'manage_issues',
+          description:
+            'Seerr issues (problems with media already in the library): list/get/create/comment/resolve/reopen. ' +
+            'create takes mediaType + tmdbId; season/episode narrow a TV issue.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: ['list', 'get', 'create', 'comment', 'resolve', 'reopen'] },
+              issueId: { type: 'number', description: 'get/comment/resolve/reopen' },
+              filter: { type: 'string', enum: ['all', 'open', 'resolved'], default: 'open' },
+              createdBy: { type: 'number', description: 'list: Seerr user id' },
+              take: { type: 'number', default: 20 },
+              skip: { type: 'number', default: 0 },
+              sort: { type: 'string', enum: ['added', 'modified'], default: 'added' },
+              mediaType: { type: 'string', enum: ['movie', 'tv'] },
+              tmdbId: { type: 'number' },
+              issueType: { type: 'string', enum: ['video', 'audio', 'subtitles', 'other'] },
+              message: { type: 'string', description: 'create/comment' },
+              season: { type: 'number' },
+              episode: { type: 'number' },
+              format: { type: 'string', enum: ['compact', 'full'], default: 'compact' },
+            },
+            required: ['action'],
+          },
+        },
       ],
     }));
 
@@ -687,6 +738,10 @@ class OverseerrServer {
             return await this.handleGetServices(request.params.arguments);
           case 'get_service_details':
             return await this.handleGetServiceDetails(request.params.arguments);
+          case 'discover_media':
+            return await this.handleDiscover(request.params.arguments);
+          case 'manage_issues':
+            return await this.handleManageIssues(request.params.arguments);
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,
@@ -1384,6 +1439,131 @@ class OverseerrServer {
         },
       ],
     };
+  }
+
+  private async handleDiscover(args: DiscoverArgs) {
+    const mediaType = args.mediaType || 'all';
+    const params = { page: args.page || 1, language: args.language || 'en' };
+    let pages: SearchResult[];
+
+    switch (args.list) {
+      case 'trending':
+        pages = [await this.client.discover('trending', { ...params, mediaType, timeWindow: args.timeWindow || 'day' })];
+        break;
+      case 'upcoming':
+      case 'popular': {
+        const types = mediaType === 'all' ? ['movies', 'tv'] : [mediaType === 'movie' ? 'movies' : 'tv'];
+        const suffix = args.list === 'upcoming' ? '/upcoming' : '';
+        pages = await Promise.all(types.map(t => this.client.discover(`${t}${suffix}`, params)));
+        break;
+      }
+      default:
+        throw new McpError(ErrorCode.InvalidParams, `Unknown list: ${args.list}`);
+    }
+
+    const items = this.limitResults(
+      pages.flatMap(p => p.results).filter(item => item.mediaType === 'movie' || item.mediaType === 'tv'),
+      args.limit
+    );
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          list: args.list,
+          page: params.page,
+          totalPages: Math.max(...pages.map(p => p.totalPages)),
+          results: (args.format || 'compact') === 'compact' ? items.map(item => this.formatCompactResult(item)) : items,
+        }, null, 2),
+      }],
+    };
+  }
+
+  private async handleManageIssues(args: ManageIssuesArgs) {
+    switch (args.action) {
+      case 'list': {
+        const data = await this.client.listIssues({
+          filter: args.filter, take: args.take, skip: args.skip, sort: args.sort, createdBy: args.createdBy,
+        });
+        const results = args.format === 'full' ? data.results : await Promise.all(data.results.map(i => this.formatCompactIssue(i)));
+        return this.jsonContent({ results, pageInfo: data.pageInfo });
+      }
+      case 'create': {
+        if (!args.mediaType || !args.tmdbId || !args.issueType || !args.message) {
+          throw new McpError(ErrorCode.InvalidParams, 'create needs mediaType, tmdbId, issueType and message');
+        }
+        const details = await this.client.getMediaDetails(args.mediaType, args.tmdbId);
+        if (!details.mediaInfo?.id) {
+          return {
+            content: [{ type: 'text', text: `${details.title || details.name || args.tmdbId} is not in Seerr's library, so it cannot have an issue.` }],
+            isError: true,
+          };
+        }
+        const issue = await this.client.createIssue({
+          mediaId: details.mediaInfo.id,
+          issueType: ISSUE_TYPES.indexOf(args.issueType.toUpperCase()) + 1,
+          message: args.message,
+          ...(args.season != null ? { problemSeason: args.season } : {}),
+          ...(args.episode != null ? { problemEpisode: args.episode } : {}),
+        });
+        return this.issueContent(issue, args);
+      }
+      case 'get':
+      case 'comment':
+      case 'resolve':
+      case 'reopen': {
+        if (!args.issueId) {
+          throw new McpError(ErrorCode.InvalidParams, `issueId is required for ${args.action}`);
+        }
+        if (args.action === 'comment' && !args.message) {
+          throw new McpError(ErrorCode.InvalidParams, 'message is required for comment');
+        }
+        const issue = args.action === 'get' ? await this.client.getIssue(args.issueId)
+          : args.action === 'comment' ? await this.client.commentIssue(args.issueId, args.message!)
+          : await this.client.setIssueStatus(args.issueId, args.action === 'resolve' ? 'resolved' : 'open');
+        return this.issueContent(issue, args);
+      }
+      default:
+        throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${args.action}`);
+    }
+  }
+
+  private async issueContent(issue: Issue, args: ManageIssuesArgs) {
+    if (args.format === 'full') return this.jsonContent(issue);
+    const compact = await this.formatCompactIssue(issue);
+    const { lastComment, ...rest } = compact;
+    return this.jsonContent({
+      ...rest,
+      comments: (issue.comments || []).map(c => ({
+        user: c.user?.displayName || c.user?.email, message: c.message, createdAt: c.createdAt,
+      })),
+    });
+  }
+
+  /** Issues carry only the TMDB id; the title comes from the (cached) media details. */
+  private async formatCompactIssue(issue: Issue) {
+    const details = await this.client.getMediaDetails(issue.media.mediaType, issue.media.tmdbId).catch(() => undefined);
+    const comments = issue.comments || [];
+    const last = comments[comments.length - 1];
+    return {
+      id: issue.id,
+      type: ISSUE_TYPES[issue.issueType - 1] || 'UNKNOWN',
+      status: issue.status === 2 ? 'RESOLVED' : 'OPEN',
+      title: details?.title || details?.name,
+      mediaType: issue.media.mediaType,
+      tmdbId: issue.media.tmdbId,
+      season: issue.problemSeason || undefined,
+      episode: issue.problemEpisode || undefined,
+      createdBy: issue.createdBy?.displayName || issue.createdBy?.email,
+      createdAt: issue.createdAt,
+      updatedAt: issue.updatedAt,
+      comments: comments.length,
+      lastComment: last ? `${last.user?.displayName || last.user?.email}: ${last.message}` : undefined,
+    };
+  }
+
+  private jsonContent(data: unknown) {
+    return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
   }
 
   private async handleManageRequests(args: any) {

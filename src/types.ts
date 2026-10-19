@@ -150,6 +150,54 @@ export interface ManageRequestsArgs {
   removeMedia?: boolean;
 }
 
+export interface DiscoverArgs {
+  list: 'trending' | 'upcoming' | 'popular';
+  mediaType?: 'all' | 'movie' | 'tv';
+  timeWindow?: 'day' | 'week';
+  page?: number;
+  limit?: number;
+  language?: string;
+  format?: 'compact' | 'full';
+}
+
+export interface IssueComment {
+  id: number;
+  message: string;
+  createdAt?: string;
+  user?: { id: number; displayName?: string; email?: string };
+}
+
+export interface Issue {
+  id: number;
+  issueType: number;
+  status: number;
+  problemSeason?: number;
+  problemEpisode?: number;
+  createdAt: string;
+  updatedAt: string;
+  media: { id: number; tmdbId: number; mediaType: 'movie' | 'tv'; status: number };
+  createdBy?: { id: number; displayName?: string; email?: string };
+  modifiedBy?: { id: number; displayName?: string; email?: string } | null;
+  comments?: IssueComment[];
+}
+
+export interface ManageIssuesArgs {
+  action: 'list' | 'get' | 'create' | 'comment' | 'resolve' | 'reopen';
+  issueId?: number;
+  filter?: 'all' | 'open' | 'resolved';
+  createdBy?: number;
+  take?: number;
+  skip?: number;
+  sort?: 'added' | 'modified';
+  mediaType?: 'movie' | 'tv';
+  tmdbId?: number;
+  issueType?: 'video' | 'audio' | 'subtitles' | 'other';
+  message?: string;
+  season?: number;
+  episode?: number;
+  format?: 'compact' | 'full';
+}
+
 export interface GetDetailsArgs {
   mediaType?: 'movie' | 'tv';
   mediaId?: number;
