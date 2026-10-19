@@ -1558,7 +1558,8 @@ class OverseerrServer {
       createdAt: issue.createdAt,
       updatedAt: issue.updatedAt,
       comments: comments.length,
-      lastComment: last ? `${last.user?.displayName || last.user?.email}: ${last.message}` : undefined,
+      // Seerr's issue list doesn't join comment authors; only get/create/comment carry them.
+      lastComment: last ? [last.user?.displayName || last.user?.email, last.message].filter(Boolean).join(': ') : undefined,
     };
   }
 

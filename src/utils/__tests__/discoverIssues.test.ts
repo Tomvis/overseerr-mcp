@@ -118,6 +118,15 @@ test('issues list: open by default, compact with title from media details', asyn
   });
 });
 
+test('issues list: comment without its author (Seerr list does not join it) shows just the message', async () => {
+  const bare = { ...issue, comments: [{ id: 2, message: 'Looking' }] };
+  const { result } = await callVia('manage_issues', { action: 'list', filter: 'all' }, {
+    'GET /api/v1/issue?take=20&skip=0&sort=added&filter=all': { body: { pageInfo: {}, results: [bare] } },
+    'GET /api/v1/tv/95396': { body: tvDetails },
+  });
+  assert.equal(result.results[0].lastComment, 'Looking');
+});
+
 test('issues get returns every comment', async () => {
   const { result } = await callVia('manage_issues', { action: 'get', issueId: 7 }, {
     'GET /api/v1/issue/7': { body: issue },
